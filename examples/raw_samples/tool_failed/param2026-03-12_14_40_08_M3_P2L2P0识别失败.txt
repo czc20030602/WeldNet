@@ -1,0 +1,77 @@
+{
+    "actIntersectType": 0,
+    "boundaryRadius": 10,
+    "cloudType": 0,
+    "clusterDist": 5,
+    "downsampleVoxgridRes": 0.5,
+    "endPos1": [
+        5474.29,
+        1039.58,
+        112.068
+    ],
+    "endPos2": [
+        5475.48,
+        1141.24,
+        13.758
+    ],
+    "endPos3": [
+        5574.33,
+        1040.11,
+        12.1063
+    ],
+    "errThreshold": 80,
+    "holeSize": 15,
+    "holeType": 0,
+    "isCluster": 0,
+    "isGeometryValid": true,
+    "isGroundRemoval": false,
+    "isHoleDetect": false,
+    "isUpSampling": true,
+    "lineCnt": 0,
+    "lineDistance": 0,
+    "minCurvature": 0.1,
+    "minLinePointNum": 40,
+    "normalPlane1": [
+        0.999935,
+        -0.0114394,
+        0.000239323
+    ],
+    "normalPlane2": [
+        0.0114338,
+        0.999794,
+        0.0167568
+    ],
+    "normalPlane3": [
+        -0.000430961,
+        -0.0167529,
+        0.99986
+    ],
+    "normalPlane4": [
+        0,
+        0,
+        0
+    ],
+    "percentOfMaxPlanePointNum": 0.5,
+    "planeIndexForLap": 0,
+    "projLaserDir": [
+        0,
+        0,
+        -1
+    ],
+    "regionGrowCurvatureThr": 1,
+    "regionGrowMinNum": 100,
+    "regionGrowNormalAngle": 1,
+    "scanType": 0,
+    "startPos": [
+        5474.33,
+        1041.26,
+        12.0824
+    ],
+    "startPosReal": [
+        5474.33,
+        1041.26,
+        12.0824
+    ],
+    "twoPlaneMethodType": 1,
+    "wrapBias": 0
+}

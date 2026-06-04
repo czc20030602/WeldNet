@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+
+# Local PyInstaller outputs
+build/
+dist/
+*.spec
+
+# Generated inference outputs
+*.jsonl
+outputs/
+
+# Local editor/system files
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,91 @@
+{
+    "Version": "VisionFine v5.6.2 2025-11-18",
+    "anglePlane12": 0,
+    "anglePlane13": 0,
+    "anglePlane23": 0,
+    "endPos1": [
+        0,
+        0,
+        0
+    ],
+    "endPos2": [
+        0,
+        0,
+        0
+    ],
+    "endPos3": [
+        0,
+        0,
+        0
+    ],
+    "holeSize": 0,
+    "lineCoef12": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+    ],
+    "lineCoef13": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+    ],
+    "lineCoef23": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+    ],
+    "planeCoef1": [
+        0,
+        0,
+        0,
+        0
+    ],
+    "planeCoef2": [
+        0,
+        0,
+        0,
+        0
+    ],
+    "planeCoef3": [
+        0,
+        0,
+        0,
+        0
+    ],
+    "refErr": 0,
+    "startPos": [
+        0,
+        0,
+        0
+    ],
+    "totalTime": 0,
+    "weldEnd": [
+        0,
+        0,
+        0
+    ],
+    "weldStart": [
+        0,
+        0,
+        0
+    ],
+    "weldStart2": [
+        0,
+        0,
+        0
+    ],
+    "weldStart3": [
+        0,
+        0,
+        0
+    ]
+}
