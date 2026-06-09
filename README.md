@@ -1,10 +1,12 @@
 # FineLocation 推理工具
 
-这个文件夹用于运行焊缝起点精定位两阶段网络。当前内置模型是“参考点 3 mm 数据增强”版本。
+这个项目用于运行焊缝起点精定位两阶段网络。当前内置模型是“参考点 3 mm 数据增强”版本。
 
-## 1. 创建环境
+## 1. 环境安装
 
-推荐先用 CPU 环境，兼容性最好：
+### Ubuntu / Linux
+
+CPU 版，兼容性最好：
 
 ```bash
 conda create -n fineloc python=3.11 -y
@@ -14,9 +16,31 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install numpy open3d
 ```
 
-如果机器有 NVIDIA 显卡，也可以安装 GPU 版：
+NVIDIA GPU 版：
 
 ```bash
+conda create -n fineloc python=3.11 -y
+conda activate fineloc
+
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install numpy open3d
+```
+
+### Windows PowerShell
+
+CPU 版：
+
+```powershell
+conda create -n fineloc python=3.11 -y
+conda activate fineloc
+
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install numpy open3d
+```
+
+NVIDIA GPU 版：
+
+```powershell
 conda create -n fineloc python=3.11 -y
 conda activate fineloc
 
@@ -27,12 +51,7 @@ pip install numpy open3d
 检查环境：
 
 ```bash
-python - <<'PY'
-import torch, open3d, numpy
-print("torch:", torch.__version__, "cuda:", torch.cuda.is_available())
-print("open3d:", open3d.__version__)
-print("numpy:", numpy.__version__)
-PY
+python -c "import torch, open3d, numpy; print('torch:', torch.__version__, 'cuda:', torch.cuda.is_available()); print('open3d:', open3d.__version__); print('numpy:', numpy.__version__)"
 ```
 
 ## 2. 输入文件
@@ -43,44 +62,54 @@ PY
 - `param*.txt`：参数 JSON，必须包含 `startPos` 和 `endPos1`。
 - `result_*.txt`：可选，用于显示传统工具输出点和计算误差；没有也能推理。
 
-## 3. 直接运行一组自带样本
+## 3. 运行自带样本
 
-进入本文件夹：
+### Ubuntu / Linux
 
 ```bash
 cd ToolFineLocation_infer_ref3
-```
 
-运行 normal 样本：
-
-```bash
 python fineloc_infer.py \
-  --cloud examples/raw_samples/normal/cloud_2025-12-12_09_15_19_M0_P0L0P1识别成功.pcd \
-  --param examples/raw_samples/normal/param2025-12-12_09_15_19_M0_P0L0P1识别成功.txt \
-  --result examples/raw_samples/normal/result_2025-12-12_09_15_19_M0_P0L0P1识别成功.txt \
+  --cloud "examples/raw_samples/normal/cloud_2025-12-12_09_15_19_M0_P0L0P1识别成功.pcd" \
+  --param "examples/raw_samples/normal/param2025-12-12_09_15_19_M0_P0L0P1识别成功.txt" \
+  --result "examples/raw_samples/normal/result_2025-12-12_09_15_19_M0_P0L0P1识别成功.txt" \
   --device cpu
 ```
 
-也可以用脚本运行同一组样本：
+也可以运行：
 
 ```bash
 bash examples/run_one.sh
 ```
 
-如果要打开三维可视化窗口，加上：
+### Windows PowerShell
+
+```powershell
+cd C:\WeldNet
+
+python fineloc_infer.py `
+  --cloud "examples\raw_samples\normal\cloud_2025-12-12_09_15_19_M0_P0L0P1识别成功.pcd" `
+  --param "examples\raw_samples\normal\param2025-12-12_09_15_19_M0_P0L0P1识别成功.txt" `
+  --result "examples\raw_samples\normal\result_2025-12-12_09_15_19_M0_P0L0P1识别成功.txt" `
+  --device cpu
+```
+
+需要三维可视化时，在命令末尾加：
 
 ```bash
 --visualize
 ```
 
+如果可视化窗口打不开，通常是 OpenGL / 显卡驱动 / 远程桌面环境问题；不加 `--visualize` 不影响推理。
+
 ## 4. 批量推理
 
-推理一个文件夹：
+### Ubuntu / Linux
 
 ```bash
 python fineloc_infer.py \
-  --raw-dir /path/FineLocationData2026 \
-  --output-jsonl predictions.jsonl \
+  --raw-dir "/path/FineLocationData2026" \
+  --output-jsonl "predictions.jsonl" \
   --device cpu
 ```
 
@@ -88,20 +117,35 @@ python fineloc_infer.py \
 
 ```bash
 python fineloc_infer.py \
-  --raw-dir /path/PointCloudData \
+  --raw-dir "/path/PointCloudData" \
   --recursive \
-  --output-jsonl predictions.jsonl \
+  --output-jsonl "predictions.jsonl" \
+  --device cpu
+```
+
+### Windows PowerShell
+
+```powershell
+python fineloc_infer.py `
+  --raw-dir "D:\FineLocationData2026" `
+  --output-jsonl "predictions.jsonl" `
+  --device cpu
+```
+
+递归推理多级目录：
+
+```powershell
+python fineloc_infer.py `
+  --raw-dir "D:\PointCloudData" `
+  --recursive `
+  --output-jsonl "predictions.jsonl" `
   --device cpu
 ```
 
 自带 4 组示例数据也可以批量推理：
 
 ```bash
-python fineloc_infer.py \
-  --raw-dir examples/raw_samples \
-  --recursive \
-  --output-jsonl examples/predictions.jsonl \
-  --device cpu
+python fineloc_infer.py --raw-dir examples/raw_samples --recursive --output-jsonl examples/predictions.jsonl --device cpu
 ```
 
 ## 5. 输出含义
