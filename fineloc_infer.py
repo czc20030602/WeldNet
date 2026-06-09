@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import pathlib
 import sys
 import time
 from pathlib import Path
@@ -180,7 +181,17 @@ class PointHeatmapOffsetNet(nn.Module):
 
 
 def load_model(checkpoint_path: Path, device: torch.device) -> PointHeatmapOffsetNet:
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if sys.platform.startswith("win"):
+        # The checkpoints were saved on Linux and contain pathlib.PosixPath
+        # objects in metadata. Windows cannot unpickle PosixPath directly.
+        original_posix_path = pathlib.PosixPath
+        try:
+            pathlib.PosixPath = pathlib.WindowsPath
+            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        finally:
+            pathlib.PosixPath = original_posix_path
+    else:
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model = PointHeatmapOffsetNet().to(device)
     state = checkpoint["model_state"]
     result = model.load_state_dict(state, strict=False)
