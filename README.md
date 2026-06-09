@@ -67,7 +67,8 @@ python -c "import torch, open3d, numpy; print('torch:', torch.__version__, 'cuda
 ### Ubuntu / Linux
 
 ```bash
-cd ToolFineLocation_infer_ref3
+git clone https://github.com/czc20030602/WeldNet.git
+cd WeldNet
 
 python fineloc_infer.py \
   --cloud "examples/raw_samples/normal/cloud_2025-12-12_09_15_19_M0_P0L0P1识别成功.pcd" \
@@ -85,7 +86,8 @@ bash examples/run_one.sh
 ### Windows PowerShell
 
 ```powershell
-cd C:\WeldNet
+git clone https://github.com/czc20030602/WeldNet.git
+cd WeldNet
 
 python fineloc_infer.py `
   --cloud "examples\raw_samples\normal\cloud_2025-12-12_09_15_19_M0_P0L0P1识别成功.pcd" `
