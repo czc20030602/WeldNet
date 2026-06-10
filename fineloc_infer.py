@@ -277,6 +277,7 @@ def visualize_prediction(
     final_delta: np.ndarray,
     final_line_dir: np.ndarray | None,
     tool_point: np.ndarray | None,
+    tool_line_dir: np.ndarray | None,
     point_size: float,
     marker_radius: float,
 ) -> None:
@@ -302,6 +303,15 @@ def visualize_prediction(
     if tool_point is not None and is_valid_point(tool_point):
         tool = tool_point.astype(np.float32) - ref_point
         geoms.append(make_sphere(tool, marker_radius, [0.95, 0.12, 0.12]))
+        if tool_line_dir is not None and np.linalg.norm(tool_line_dir) > 1e-6:
+            tool_idx = len(points)
+            points.append(tool)
+            tool_dir = normalize_np(tool_line_dir.astype(np.float32))
+            tool_line_end = tool + tool_dir * float(np.linalg.norm(end_delta))
+            tool_line_idx = len(points)
+            points.append(tool_line_end)
+            lines.append([tool_idx, tool_line_idx])
+            colors.append([1.0, 0.45, 0.0])
     if final_line_dir is not None and np.linalg.norm(final_line_dir) > 1e-6:
         line_dir = normalize_np(final_line_dir.astype(np.float32))
         line_end = pred + line_dir * float(np.linalg.norm(end_delta))
@@ -311,7 +321,7 @@ def visualize_prediction(
         colors.append([0.0, 0.75, 0.9])
     geoms.insert(1, make_line(np.stack(points, axis=0), lines, colors))
 
-    print("colors: gray cloud, blue reference, red tool output point, green network output point, yellow stage1 point, purple seam prior, cyan network line direction")
+    print("colors: gray cloud, blue reference, red tool output point, orange tool line direction, green network output point, yellow stage1 point, purple seam prior, cyan network line direction")
     vis = o3d.visualization.Visualizer()
     vis.create_window(window_name="FineLocation inference", width=1280, height=860)
     for geom in geoms:
@@ -346,7 +356,7 @@ def infer_one(
     device: torch.device,
     stage1_points: int,
     stage2_knn_points: int,
-) -> tuple[dict[str, Any], np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+) -> tuple[dict[str, Any], np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     start = time.perf_counter()
     param = load_json(param_path)
     ref_point = np.asarray(param["startPos"], dtype=np.float32)
@@ -381,11 +391,18 @@ def infer_one(
     }
 
     tool_point = None
+    tool_line_dir = None
     if result_path is not None and result_path.exists():
         result = load_json(result_path)
         tool_point = np.asarray(result.get("weldStart", [0, 0, 0]), dtype=np.float32)
+        line_coef12 = np.asarray(result.get("lineCoef12", [0, 0, 0, 0, 0, 0]), dtype=np.float32)
+        if line_coef12.shape[0] >= 6:
+            tool_line_dir = normalize_np(line_coef12[3:6])
+            if not np.any(tool_line_dir):
+                tool_line_dir = None
         row["result_ref_err"] = float(result.get("refErr", 0.0))
         row["target_valid"] = is_valid_point(tool_point)
+        row["tool_line_dir"] = None if tool_line_dir is None else tool_line_dir.tolist()
         if row["target_valid"]:
             target_delta = tool_point - ref_point
             final_err = final_delta - target_delta
@@ -395,7 +412,7 @@ def infer_one(
             row["final_mae_mm"] = float(np.mean(np.abs(final_err)))
             row.update({f"final_{k}": v for k, v in decompose_error(final_err, end_delta).items()})
 
-    return row, raw_points, ref_point, end_delta, coarse_delta, final_delta, final_line_dir, tool_point
+    return row, raw_points, ref_point, end_delta, coarse_delta, final_delta, final_line_dir, tool_point, tool_line_dir
 
 
 def parse_args() -> argparse.Namespace:
@@ -448,7 +465,7 @@ def main() -> None:
     if args.cloud is None or args.param is None:
         raise SystemExit("single inference requires --cloud and --param, or use --raw-dir for batch inference")
 
-    row, raw_points, ref_point, end_delta, coarse_delta, final_delta, final_line_dir, tool_point = infer_one(
+    row, raw_points, ref_point, end_delta, coarse_delta, final_delta, final_line_dir, tool_point, tool_line_dir = infer_one(
         args.cloud.resolve(),
         args.param.resolve(),
         None if args.result is None else args.result.resolve(),
@@ -464,7 +481,7 @@ def main() -> None:
         args.save_json.parent.mkdir(parents=True, exist_ok=True)
         args.save_json.write_text(text + "\n", encoding="utf-8")
     if args.visualize:
-        visualize_prediction(raw_points, ref_point, end_delta, coarse_delta, final_delta, final_line_dir, tool_point, args.point_size, args.marker_radius)
+        visualize_prediction(raw_points, ref_point, end_delta, coarse_delta, final_delta, final_line_dir, tool_point, tool_line_dir, args.point_size, args.marker_radius)
 
 
 if __name__ == "__main__":
