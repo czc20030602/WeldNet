@@ -104,7 +104,20 @@ python fineloc_infer.py `
 
 如果可视化窗口打不开，通常是 OpenGL / 显卡驱动 / 远程桌面环境问题；不加 `--visualize` 不影响推理。
 
-## 4. 批量推理
+## 4. 可视化颜色说明
+
+加 `--visualize` 后会打开 Open3D 三维窗口。各颜色含义如下：
+
+- 灰色点云：原始扫描点云，以 `param.startPos` 为原点显示。
+- 蓝点：参考点 `param.startPos`。
+- 紫线：输入先验焊缝方向 `param.startPos -> param.endPos1`。
+- 黄点：一阶段网络粗定位点 `coarse_point`。
+- 绿点：二阶段网络最终输出起点 `final_start_point`。
+- 青线：从绿点发出的网络预测焊缝方向 `final_line_dir`。
+- 红点：传统工具输出起点 `result.weldStart`，仅在提供有效 `result_*.txt` 时显示。
+- 橙线：从红点发出的传统工具检测焊缝方向 `result.lineCoef12[3:6]`，仅在 `result_*.txt` 中存在 `lineCoef12` 时显示。
+
+## 5. 批量推理
 
 ### Ubuntu / Linux
 
@@ -150,7 +163,7 @@ python fineloc_infer.py `
 python fineloc_infer.py --raw-dir examples/raw_samples --recursive --output-jsonl examples/predictions.jsonl --device cpu
 ```
 
-## 5. 输出含义
+## 6. 输出含义
 
 主要输出字段：
 
@@ -164,7 +177,7 @@ python fineloc_infer.py --raw-dir examples/raw_samples --recursive --output-json
 - `final_parallel_abs_mm`：沿参考焊缝方向的误差。
 - `final_perp_mm`：垂直参考焊缝方向的误差。
 
-## 6. 自带样本说明
+## 7. 自带样本说明
 
 `examples/raw_samples/` 下包含：
 
@@ -173,7 +186,7 @@ python fineloc_infer.py --raw-dir examples/raw_samples --recursive --output-json
 - `high_error_1/`：大误差样本。
 - `high_error_2/`：端点附近点云质量较差的大误差样本。
 
-## 7. 模型流程
+## 8. 模型流程
 
 默认流程：
 
