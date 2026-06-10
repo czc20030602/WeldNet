@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 try:
     import open3d as o3d
@@ -134,9 +135,10 @@ def crop_knn_around_delta(
 class PointHeatmapOffsetNet(nn.Module):
     """Point-wise heatmap + offset model used for both stages."""
 
-    def __init__(self, dropout: float = 0.0) -> None:
+    def __init__(self, dropout: float = 0.0, include_line_head: bool = False) -> None:
         super().__init__()
         self.dropout = float(dropout)
+        self.include_line_head = bool(include_line_head)
         self.point_encoder = nn.Sequential(
             nn.Conv1d(3, 64, kernel_size=1),
             nn.BatchNorm1d(64),
@@ -159,12 +161,19 @@ class PointHeatmapOffsetNet(nn.Module):
         )
         self.heatmap_head = nn.Conv1d(128, 1, kernel_size=1)
         self.offset_head = nn.Conv1d(128, 3, kernel_size=1)
+        if self.include_line_head:
+            self.line_head = nn.Sequential(
+                nn.Linear(256, 128),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p=self.dropout) if self.dropout > 0 else nn.Identity(),
+                nn.Linear(128, 3),
+            )
 
     def forward(self, points: torch.Tensor, _params: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         xyz = points.transpose(1, 2)
         point_feat = self.point_encoder(xyz)
-        global_feat = torch.max(point_feat, dim=2, keepdim=True)[0]
-        global_feat = global_feat.expand(-1, -1, points.shape[1])
+        global_vec = torch.max(point_feat, dim=2)[0]
+        global_feat = global_vec.unsqueeze(-1).expand(-1, -1, points.shape[1])
         point_context = torch.cat([point_feat, global_feat, xyz], dim=1)
         point_context = self.point_head(point_context)
         heatmap_logits = self.heatmap_head(point_context).squeeze(1)
@@ -172,12 +181,15 @@ class PointHeatmapOffsetNet(nn.Module):
         candidate_points = points + offsets
         weights = torch.softmax(heatmap_logits, dim=1)
         pred_delta = torch.sum(candidate_points * weights.unsqueeze(-1), dim=1)
-        return {
+        outputs = {
             "pred_delta": pred_delta,
             "heatmap_logits": heatmap_logits,
             "offsets": offsets,
             "weights": weights,
         }
+        if self.include_line_head:
+            outputs["pred_line_dir"] = F.normalize(self.line_head(global_vec), dim=1, eps=1e-6)
+        return outputs
 
 
 def load_model(checkpoint_path: Path, device: torch.device) -> PointHeatmapOffsetNet:
@@ -192,12 +204,12 @@ def load_model(checkpoint_path: Path, device: torch.device) -> PointHeatmapOffse
             pathlib.PosixPath = original_posix_path
     else:
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    model = PointHeatmapOffsetNet().to(device)
     state = checkpoint["model_state"]
+    has_line_head = any(key.startswith("line_head.") for key in state)
+    model = PointHeatmapOffsetNet(include_line_head=has_line_head).to(device)
     result = model.load_state_dict(state, strict=False)
-    unexpected = [key for key in result.unexpected_keys if not key.startswith("line_head.")]
-    if result.missing_keys or unexpected:
-        raise RuntimeError(f"incompatible checkpoint: missing={result.missing_keys}, unexpected={unexpected}")
+    if result.missing_keys or result.unexpected_keys:
+        raise RuntimeError(f"incompatible checkpoint: missing={result.missing_keys}, unexpected={result.unexpected_keys}")
     model.eval()
     return model
 
@@ -208,13 +220,19 @@ def predict_delta_global(
     points_global_ref_frame: np.ndarray,
     end_delta: np.ndarray,
     device: torch.device,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray | None]:
     frame = line_frame_from_end_delta(end_delta.astype(np.float32))
     points_line = points_global_ref_frame.astype(np.float32) @ frame
     points = torch.from_numpy(points_line).unsqueeze(0).to(device)
     params = torch.zeros((1, 0), dtype=torch.float32, device=device)
-    pred_local = model(points, params)["pred_delta"].squeeze(0).detach().cpu().numpy().astype(np.float32)
-    return (pred_local @ frame.T).astype(np.float32)
+    outputs = model(points, params)
+    pred_local = outputs["pred_delta"].squeeze(0).detach().cpu().numpy().astype(np.float32)
+    pred_delta = (pred_local @ frame.T).astype(np.float32)
+    pred_line_global = None
+    if "pred_line_dir" in outputs:
+        pred_line_local = outputs["pred_line_dir"].squeeze(0).detach().cpu().numpy().astype(np.float32)
+        pred_line_global = normalize_np(pred_line_local @ frame.T)
+    return pred_delta, pred_line_global
 
 
 def is_valid_point(point: np.ndarray, eps: float = 1e-6) -> bool:
@@ -257,6 +275,7 @@ def visualize_prediction(
     end_delta: np.ndarray,
     coarse_delta: np.ndarray,
     final_delta: np.ndarray,
+    final_line_dir: np.ndarray | None,
     tool_point: np.ndarray | None,
     point_size: float,
     marker_radius: float,
@@ -287,9 +306,16 @@ def visualize_prediction(
         lines.extend([[0, tool_idx], [tool_idx, 1]])
         colors.extend([[0.95, 0.15, 0.15], [0.0, 0.65, 1.0]])
         geoms.append(make_sphere(tool, marker_radius, [0.95, 0.12, 0.12]))
+    if final_line_dir is not None and np.linalg.norm(final_line_dir) > 1e-6:
+        line_dir = normalize_np(final_line_dir.astype(np.float32))
+        line_end = pred + line_dir * float(np.linalg.norm(end_delta))
+        line_idx = len(points)
+        points.append(line_end)
+        lines.append([1, line_idx])
+        colors.append([0.0, 0.75, 0.9])
     geoms.insert(1, make_line(np.stack(points, axis=0), lines, colors))
 
-    print("colors: gray cloud, blue reference, red tool output, green network output, yellow stage1, purple seam direction")
+    print("colors: gray cloud, blue reference, red tool output, green network output, yellow stage1, purple seam prior, cyan network line direction")
     vis = o3d.visualization.Visualizer()
     vis.create_window(window_name="FineLocation inference", width=1280, height=860)
     for geom in geoms:
@@ -324,7 +350,7 @@ def infer_one(
     device: torch.device,
     stage1_points: int,
     stage2_knn_points: int,
-) -> tuple[dict[str, Any], np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+) -> tuple[dict[str, Any], np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
     start = time.perf_counter()
     param = load_json(param_path)
     ref_point = np.asarray(param["startPos"], dtype=np.float32)
@@ -332,9 +358,9 @@ def infer_one(
     raw_points = read_pcd_xyz(cloud_path)
 
     stage1_cloud = fps_downsample(raw_points, stage1_points) - ref_point[None, :]
-    coarse_delta = predict_delta_global(stage1_model, stage1_cloud, end_delta, device)
+    coarse_delta, _ = predict_delta_global(stage1_model, stage1_cloud, end_delta, device)
     refine_points, radius = crop_knn_around_delta(raw_points, ref_point, coarse_delta, stage2_knn_points)
-    residual_delta = predict_delta_global(stage2_model, refine_points, end_delta, device)
+    residual_delta, final_line_dir = predict_delta_global(stage2_model, refine_points, end_delta, device)
     final_delta = coarse_delta + residual_delta
     final_point = ref_point + final_delta
 
@@ -353,6 +379,8 @@ def infer_one(
         "residual_delta": residual_delta.tolist(),
         "final_delta": final_delta.tolist(),
         "final_start_point": final_point.tolist(),
+        "final_line_dir": None if final_line_dir is None else final_line_dir.tolist(),
+        "final_line_point": final_point.tolist(),
         "infer_seconds": float(time.perf_counter() - start),
     }
 
@@ -371,7 +399,7 @@ def infer_one(
             row["final_mae_mm"] = float(np.mean(np.abs(final_err)))
             row.update({f"final_{k}": v for k, v in decompose_error(final_err, end_delta).items()})
 
-    return row, raw_points, ref_point, end_delta, coarse_delta, final_delta, tool_point
+    return row, raw_points, ref_point, end_delta, coarse_delta, final_delta, final_line_dir, tool_point
 
 
 def parse_args() -> argparse.Namespace:
@@ -424,7 +452,7 @@ def main() -> None:
     if args.cloud is None or args.param is None:
         raise SystemExit("single inference requires --cloud and --param, or use --raw-dir for batch inference")
 
-    row, raw_points, ref_point, end_delta, coarse_delta, final_delta, tool_point = infer_one(
+    row, raw_points, ref_point, end_delta, coarse_delta, final_delta, final_line_dir, tool_point = infer_one(
         args.cloud.resolve(),
         args.param.resolve(),
         None if args.result is None else args.result.resolve(),
@@ -440,7 +468,7 @@ def main() -> None:
         args.save_json.parent.mkdir(parents=True, exist_ok=True)
         args.save_json.write_text(text + "\n", encoding="utf-8")
     if args.visualize:
-        visualize_prediction(raw_points, ref_point, end_delta, coarse_delta, final_delta, tool_point, args.point_size, args.marker_radius)
+        visualize_prediction(raw_points, ref_point, end_delta, coarse_delta, final_delta, final_line_dir, tool_point, args.point_size, args.marker_radius)
 
 
 if __name__ == "__main__":

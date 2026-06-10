@@ -155,6 +155,8 @@ python fineloc_infer.py --raw-dir examples/raw_samples --recursive --output-json
 主要输出字段：
 
 - `final_start_point`：网络预测的焊缝起点，原始坐标系。
+- `final_line_dir`：网络预测的焊缝线方向，原始坐标系下的单位向量。
+- `final_line_point`：网络预测焊缝线经过的点，当前等于 `final_start_point`。
 - `coarse_point`：一阶段粗定位点，原始坐标系。
 - `stage2_knn_radius_mm`：二阶段从原始点云 KNN 裁剪时覆盖的半径。
 - `final_l2_mm`：如果提供了有效 `result.weldStart`，这里是网络输出和工具/标签起点的 L2 误差。
@@ -179,6 +181,6 @@ python fineloc_infer.py --raw-dir examples/raw_samples --recursive --output-json
 -> FPS 下采样 8192 点
 -> 一阶段网络预测粗定位点
 -> 以粗定位点为中心，从原始点云 KNN 取 16384 点
--> 二阶段网络预测修正量
--> 输出焊缝起点
+-> 二阶段网络预测修正量与焊缝线方向
+-> 输出焊缝起点与焊缝线方向
 ```
