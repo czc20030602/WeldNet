@@ -290,8 +290,8 @@ def visualize_prediction(
     coarse = coarse_delta.astype(np.float32)
     end = end_delta.astype(np.float32)
     points = [ref, pred, coarse, end]
-    lines = [[0, 1], [0, 3]]
-    colors = [[0.0, 0.75, 0.25], [0.55, 0.2, 0.85]]
+    lines = [[0, 3]]
+    colors = [[0.55, 0.2, 0.85]]
     geoms: list[o3d.geometry.Geometry] = [
         pcd,
         make_sphere(ref, marker_radius, [0.1, 0.3, 0.95]),
@@ -311,7 +311,7 @@ def visualize_prediction(
         colors.append([0.0, 0.75, 0.9])
     geoms.insert(1, make_line(np.stack(points, axis=0), lines, colors))
 
-    print("colors: gray cloud, blue reference, red tool output point, green network output, yellow stage1 point, purple seam prior, cyan network line direction")
+    print("colors: gray cloud, blue reference, red tool output point, green network output point, yellow stage1 point, purple seam prior, cyan network line direction")
     vis = o3d.visualization.Visualizer()
     vis.create_window(window_name="FineLocation inference", width=1280, height=860)
     for geom in geoms:
