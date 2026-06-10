@@ -290,8 +290,8 @@ def visualize_prediction(
     coarse = coarse_delta.astype(np.float32)
     end = end_delta.astype(np.float32)
     points = [ref, pred, coarse, end]
-    lines = [[0, 1], [0, 2], [0, 3]]
-    colors = [[0.0, 0.75, 0.25], [1.0, 0.8, 0.05], [0.55, 0.2, 0.85]]
+    lines = [[0, 1], [0, 3]]
+    colors = [[0.0, 0.75, 0.25], [0.55, 0.2, 0.85]]
     geoms: list[o3d.geometry.Geometry] = [
         pcd,
         make_sphere(ref, marker_radius, [0.1, 0.3, 0.95]),
@@ -301,10 +301,6 @@ def visualize_prediction(
     ]
     if tool_point is not None and is_valid_point(tool_point):
         tool = tool_point.astype(np.float32) - ref_point
-        tool_idx = len(points)
-        points.append(tool)
-        lines.extend([[0, tool_idx], [tool_idx, 1]])
-        colors.extend([[0.95, 0.15, 0.15], [0.0, 0.65, 1.0]])
         geoms.append(make_sphere(tool, marker_radius, [0.95, 0.12, 0.12]))
     if final_line_dir is not None and np.linalg.norm(final_line_dir) > 1e-6:
         line_dir = normalize_np(final_line_dir.astype(np.float32))
@@ -315,7 +311,7 @@ def visualize_prediction(
         colors.append([0.0, 0.75, 0.9])
     geoms.insert(1, make_line(np.stack(points, axis=0), lines, colors))
 
-    print("colors: gray cloud, blue reference, red tool output, green network output, yellow stage1, purple seam prior, cyan network line direction")
+    print("colors: gray cloud, blue reference, red tool output point, green network output, yellow stage1 point, purple seam prior, cyan network line direction")
     vis = o3d.visualization.Visualizer()
     vis.create_window(window_name="FineLocation inference", width=1280, height=860)
     for geom in geoms:
