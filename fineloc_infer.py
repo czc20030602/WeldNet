@@ -100,6 +100,55 @@ def line_frame_from_end_delta(end_delta: np.ndarray) -> np.ndarray:
     return np.stack([x_axis, y_axis, z_axis], axis=1).astype(np.float32)
 
 
+def select_plane_normals(param: dict[str, Any], end_delta: np.ndarray) -> tuple[np.ndarray, tuple[int, int], float]:
+    normals: dict[int, np.ndarray] = {}
+    for index in (1, 2, 3):
+        normal = normalize_np(np.asarray(param.get(f"normalPlane{index}", [0, 0, 0]), dtype=np.float32))
+        if np.any(normal):
+            normals[index] = normal
+
+    seam_dir = normalize_np(end_delta)
+    best_pair: tuple[int, int] | None = None
+    best_angle = float("inf")
+    for first, second in ((1, 2), (1, 3), (2, 3)):
+        if first not in normals or second not in normals:
+            continue
+        intersection = normalize_np(np.cross(normals[first], normals[second]))
+        if not np.any(intersection) or not np.any(seam_dir):
+            continue
+        cosine = float(np.clip(abs(np.dot(intersection, seam_dir)), 0.0, 1.0))
+        angle = math.degrees(math.acos(cosine))
+        if angle < best_angle:
+            best_pair = (first, second)
+            best_angle = angle
+
+    if best_pair is None:
+        raise ValueError("param does not contain two valid normalPlane vectors")
+    selected = np.stack([normals[best_pair[0]], normals[best_pair[1]]], axis=0).astype(np.float32)
+    return selected, best_pair, best_angle
+
+
+def plane_basis_frame(end_delta: np.ndarray, plane_normals: np.ndarray) -> tuple[np.ndarray, float, bool]:
+    """Build p_basis = p_ref @ frame from seam direction and two plane normals."""
+    x_axis = normalize_np(end_delta)
+    normal1 = normalize_np(np.asarray(plane_normals[0], dtype=np.float32))
+    normal2 = normalize_np(np.asarray(plane_normals[1], dtype=np.float32))
+    basis = np.stack([x_axis, normal1, normal2], axis=1).astype(np.float32)
+    determinant = float(np.linalg.det(basis))
+    if not np.isfinite(basis).all() or abs(determinant) < 1e-4:
+        return line_frame_from_end_delta(end_delta), determinant, True
+    return np.linalg.inv(basis.T).astype(np.float32), determinant, False
+
+
+def vector_from_basis(vector_local: np.ndarray, frame: np.ndarray) -> np.ndarray:
+    return (np.asarray(vector_local, dtype=np.float32) @ np.linalg.inv(frame)).astype(np.float32)
+
+
+def normal_from_basis(normal_local: np.ndarray, frame: np.ndarray) -> np.ndarray:
+    # Training transforms plane normals with inverse-transpose. This is its inverse.
+    return normalize_np(np.asarray(normal_local, dtype=np.float32) @ frame.T)
+
+
 def fps_downsample(points: np.ndarray, num_points: int) -> np.ndarray:
     if points.shape[0] < num_points:
         raise ValueError(f"point count {points.shape[0]} < requested {num_points}")
@@ -110,6 +159,14 @@ def fps_downsample(points: np.ndarray, num_points: int) -> np.ndarray:
     if out.shape[0] != num_points:
         raise RuntimeError(f"FPS returned {out.shape[0]} points, expected {num_points}")
     return out
+
+
+def random_downsample(points: np.ndarray, num_points: int, seed: int) -> np.ndarray:
+    if points.shape[0] < num_points:
+        raise ValueError(f"point count {points.shape[0]} < requested {num_points}")
+    rng = np.random.default_rng(seed)
+    indices = rng.choice(points.shape[0], size=num_points, replace=False)
+    return points[indices].astype(np.float32, copy=False)
 
 
 def crop_knn_around_delta(
@@ -135,10 +192,16 @@ def crop_knn_around_delta(
 class PointHeatmapOffsetNet(nn.Module):
     """Point-wise heatmap + offset model used for both stages."""
 
-    def __init__(self, dropout: float = 0.0, include_line_head: bool = False) -> None:
+    def __init__(
+        self,
+        dropout: float = 0.0,
+        include_line_head: bool = False,
+        include_plane_head: bool = False,
+    ) -> None:
         super().__init__()
         self.dropout = float(dropout)
         self.include_line_head = bool(include_line_head)
+        self.include_plane_head = bool(include_plane_head)
         self.point_encoder = nn.Sequential(
             nn.Conv1d(3, 64, kernel_size=1),
             nn.BatchNorm1d(64),
@@ -168,6 +231,13 @@ class PointHeatmapOffsetNet(nn.Module):
                 nn.Dropout(p=self.dropout) if self.dropout > 0 else nn.Identity(),
                 nn.Linear(128, 3),
             )
+        if self.include_plane_head:
+            self.plane_head = nn.Sequential(
+                nn.Linear(256, 128),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p=self.dropout) if self.dropout > 0 else nn.Identity(),
+                nn.Linear(128, 6),
+            )
 
     def forward(self, points: torch.Tensor, _params: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         xyz = points.transpose(1, 2)
@@ -189,6 +259,10 @@ class PointHeatmapOffsetNet(nn.Module):
         }
         if self.include_line_head:
             outputs["pred_line_dir"] = F.normalize(self.line_head(global_vec), dim=1, eps=1e-6)
+        if self.include_plane_head:
+            outputs["pred_plane_normals"] = F.normalize(
+                self.plane_head(global_vec).view(-1, 2, 3), dim=2, eps=1e-6
+            )
         return outputs
 
 
@@ -206,7 +280,11 @@ def load_model(checkpoint_path: Path, device: torch.device) -> PointHeatmapOffse
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     state = checkpoint["model_state"]
     has_line_head = any(key.startswith("line_head.") for key in state)
-    model = PointHeatmapOffsetNet(include_line_head=has_line_head).to(device)
+    has_plane_head = any(key.startswith("plane_head.") for key in state)
+    model = PointHeatmapOffsetNet(
+        include_line_head=has_line_head,
+        include_plane_head=has_plane_head,
+    ).to(device)
     result = model.load_state_dict(state, strict=False)
     if result.missing_keys or result.unexpected_keys:
         raise RuntimeError(f"incompatible checkpoint: missing={result.missing_keys}, unexpected={result.unexpected_keys}")
@@ -218,21 +296,26 @@ def load_model(checkpoint_path: Path, device: torch.device) -> PointHeatmapOffse
 def predict_delta_global(
     model: nn.Module,
     points_global_ref_frame: np.ndarray,
-    end_delta: np.ndarray,
+    frame: np.ndarray,
     device: torch.device,
-) -> tuple[np.ndarray, np.ndarray | None]:
-    frame = line_frame_from_end_delta(end_delta.astype(np.float32))
-    points_line = points_global_ref_frame.astype(np.float32) @ frame
-    points = torch.from_numpy(points_line).unsqueeze(0).to(device)
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None]:
+    points_basis = points_global_ref_frame.astype(np.float32) @ frame
+    points = torch.from_numpy(points_basis).unsqueeze(0).to(device)
     params = torch.zeros((1, 0), dtype=torch.float32, device=device)
     outputs = model(points, params)
     pred_local = outputs["pred_delta"].squeeze(0).detach().cpu().numpy().astype(np.float32)
-    pred_delta = (pred_local @ frame.T).astype(np.float32)
+    pred_delta = vector_from_basis(pred_local, frame)
     pred_line_global = None
     if "pred_line_dir" in outputs:
         pred_line_local = outputs["pred_line_dir"].squeeze(0).detach().cpu().numpy().astype(np.float32)
-        pred_line_global = normalize_np(pred_line_local @ frame.T)
-    return pred_delta, pred_line_global
+        pred_line_global = normalize_np(vector_from_basis(pred_line_local, frame))
+    pred_planes_global = None
+    if "pred_plane_normals" in outputs:
+        pred_planes_local = outputs["pred_plane_normals"].squeeze(0).detach().cpu().numpy().astype(np.float32)
+        pred_planes_global = np.stack(
+            [normal_from_basis(pred_planes_local[index], frame) for index in range(2)], axis=0
+        ).astype(np.float32)
+    return pred_delta, pred_line_global, pred_planes_global
 
 
 def is_valid_point(point: np.ndarray, eps: float = 1e-6) -> bool:
@@ -356,17 +439,29 @@ def infer_one(
     device: torch.device,
     stage1_points: int,
     stage2_knn_points: int,
+    stage1_sampling: str,
+    sampling_seed: int,
 ) -> tuple[dict[str, Any], np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     start = time.perf_counter()
     param = load_json(param_path)
     ref_point = np.asarray(param["startPos"], dtype=np.float32)
     end_delta = np.asarray(param["endPos1"], dtype=np.float32) - ref_point
+    selected_normals, selected_indices, pair_angle_deg = select_plane_normals(param, end_delta)
+    frame, basis_determinant, basis_fallback = plane_basis_frame(end_delta, selected_normals)
     raw_points = read_pcd_xyz(cloud_path)
 
-    stage1_cloud = fps_downsample(raw_points, stage1_points) - ref_point[None, :]
-    coarse_delta, _ = predict_delta_global(stage1_model, stage1_cloud, end_delta, device)
+    if stage1_sampling == "random":
+        sampled_cloud = random_downsample(raw_points, stage1_points, sampling_seed)
+    else:
+        sampled_cloud = fps_downsample(raw_points, stage1_points)
+    stage1_cloud = sampled_cloud - ref_point[None, :]
+    coarse_delta, coarse_line_dir, coarse_plane_normals = predict_delta_global(
+        stage1_model, stage1_cloud, frame, device
+    )
     refine_points, radius = crop_knn_around_delta(raw_points, ref_point, coarse_delta, stage2_knn_points)
-    residual_delta, final_line_dir = predict_delta_global(stage2_model, refine_points, end_delta, device)
+    residual_delta, final_line_dir, final_plane_normals = predict_delta_global(
+        stage2_model, refine_points, frame, device
+    )
     final_delta = coarse_delta + residual_delta
     final_point = ref_point + final_delta
 
@@ -375,18 +470,28 @@ def infer_one(
         "param": str(param_path.resolve()),
         "result": "" if result_path is None else str(result_path.resolve()),
         "raw_point_count": int(raw_points.shape[0]),
+        "stage1_sampling": stage1_sampling,
+        "sampling_seed": int(sampling_seed),
         "stage1_points": int(stage1_points),
         "stage2_knn_points": int(stage2_knn_points),
         "stage2_knn_radius_mm": float(radius),
         "ref_point": ref_point.tolist(),
         "end_delta": end_delta.tolist(),
+        "selected_param_plane_indices": list(selected_indices),
+        "selected_param_plane_normals": selected_normals.tolist(),
+        "selected_plane_intersection_angle_deg": float(pair_angle_deg),
+        "plane_basis_determinant": float(basis_determinant),
+        "plane_basis_fallback_to_line_frame": bool(basis_fallback),
         "coarse_delta": coarse_delta.tolist(),
         "coarse_point": (ref_point + coarse_delta).tolist(),
+        "coarse_line_dir": None if coarse_line_dir is None else coarse_line_dir.tolist(),
+        "coarse_plane_normals": None if coarse_plane_normals is None else coarse_plane_normals.tolist(),
         "residual_delta": residual_delta.tolist(),
         "final_delta": final_delta.tolist(),
         "final_start_point": final_point.tolist(),
         "final_line_dir": None if final_line_dir is None else final_line_dir.tolist(),
         "final_line_point": final_point.tolist(),
+        "final_plane_normals": None if final_plane_normals is None else final_plane_normals.tolist(),
         "infer_seconds": float(time.perf_counter() - start),
     }
 
@@ -428,6 +533,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stage2-checkpoint", type=Path, default=resource_path("checkpoints/stage2_best_l2.pt"))
     parser.add_argument("--stage1-points", type=int, default=STAGE1_POINTS)
     parser.add_argument("--stage2-knn-points", type=int, default=STAGE2_KNN_POINTS)
+    parser.add_argument(
+        "--stage1-sampling",
+        choices=["random", "fps"],
+        default="random",
+        help="Stage-1 downsampling. The bundled checkpoints were trained with random sampling.",
+    )
+    parser.add_argument("--sampling-seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--visualize", action="store_true")
     parser.add_argument("--point-size", type=float, default=2.0)
@@ -451,7 +563,18 @@ def main() -> None:
         with out.open("w", encoding="utf-8") as f:
             for i, (cloud, param, result) in enumerate(samples, 1):
                 try:
-                    row, *_ = infer_one(cloud, param, result, stage1, stage2, device, args.stage1_points, args.stage2_knn_points)
+                    row, *_ = infer_one(
+                        cloud,
+                        param,
+                        result,
+                        stage1,
+                        stage2,
+                        device,
+                        args.stage1_points,
+                        args.stage2_knn_points,
+                        args.stage1_sampling,
+                        args.sampling_seed,
+                    )
                     row["ok"] = True
                     ok += 1
                     print(f"[{i}/{len(samples)}] ok {row['infer_seconds']:.3f}s {result.name}")
@@ -474,6 +597,8 @@ def main() -> None:
         device,
         args.stage1_points,
         args.stage2_knn_points,
+        args.stage1_sampling,
+        args.sampling_seed,
     )
     text = json.dumps(row, ensure_ascii=False, indent=2)
     print(text)

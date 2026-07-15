@@ -1,6 +1,6 @@
 # FineLocation 推理工具
 
-这个项目用于运行焊缝起点精定位两阶段网络。当前内置模型是“参考点 3 mm 数据增强”版本。
+这个项目用于运行焊缝起点精定位两阶段网络。当前内置模型是“随机采样 + 平面法向非正交基 + 参考点 3 mm 数据增强”版本，同时输出焊缝起点、焊缝方向和两个平面法向。
 
 ## 1. 环境安装
 
@@ -59,7 +59,7 @@ python -c "import torch, open3d, numpy; print('torch:', torch.__version__, 'cuda
 推理需要：
 
 - `cloud_*.pcd`：原始点云。
-- `param*.txt`：参数 JSON，必须包含 `startPos` 和 `endPos1`。
+- `param*.txt`：参数 JSON，必须包含 `startPos`、`endPos1` 和至少两个有效的 `normalPlane1/2/3`。
 - `result_*.txt`：可选，用于显示传统工具输出点和计算误差；没有也能推理。
 
 ## 3. 运行自带样本
@@ -170,6 +170,11 @@ python fineloc_infer.py --raw-dir examples/raw_samples --recursive --output-json
 - `final_start_point`：网络预测的焊缝起点，原始坐标系。
 - `final_line_dir`：网络预测的焊缝线方向，原始坐标系下的单位向量。
 - `final_line_point`：网络预测焊缝线经过的点，当前等于 `final_start_point`。
+- `final_plane_normals`：网络预测的两个焊缝相关平面法向，原始坐标系下的单位向量，顺序与 `selected_param_plane_indices` 一致。
+- `selected_param_plane_indices`：从 `normalPlane1/2/3` 中自动选出的两个平面编号。
+- `selected_param_plane_normals`：选中的两个 param 平面法向。
+- `selected_plane_intersection_angle_deg`：所选平面交线与 `endPos1-startPos` 的夹角。
+- `plane_basis_determinant`：非正交平面基行列式；接近 0 时说明基退化。
 - `tool_line_dir`：如果提供了 `result_*.txt` 且包含 `lineCoef12`，这里是传统工具检测的焊缝方向。
 - `coarse_point`：一阶段粗定位点，原始坐标系。
 - `stage2_knn_radius_mm`：二阶段从原始点云 KNN 裁剪时覆盖的半径。
@@ -192,9 +197,14 @@ python fineloc_infer.py --raw-dir examples/raw_samples --recursive --output-json
 
 ```text
 原始点云 + param
--> FPS 下采样 8192 点
+-> 从 normalPlane1/2/3 中选择交线最接近 endPos1-startPos 的两个平面
+-> 用 [焊缝方向, 平面法向1, 平面法向2] 构造非正交坐标基
+-> 随机采样 8192 点
 -> 一阶段网络预测粗定位点
 -> 以粗定位点为中心，从原始点云 KNN 取 16384 点
--> 二阶段网络预测修正量与焊缝线方向
--> 输出焊缝起点与焊缝线方向
+-> 二阶段网络预测修正量、焊缝线方向和两个平面法向
+-> 反变换回原始坐标系
+-> 输出焊缝起点、焊缝方向与平面法向
 ```
+
+默认随机采样使用固定种子 `42`，保证同一输入重复推理结果一致。可通过 `--sampling-seed` 修改；`--stage1-sampling fps` 可切换为 FPS，但与内置模型训练分布不完全一致。
