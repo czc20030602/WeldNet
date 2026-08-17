@@ -208,3 +208,16 @@ python fineloc_infer.py --raw-dir examples/raw_samples --recursive --output-json
 ```
 
 默认随机采样使用固定种子 `42`，保证同一输入重复推理结果一致。可通过 `--sampling-seed` 修改；`--stage1-sampling fps` 可切换为 FPS，但与内置模型训练分布不完全一致。
+
+## 9. C++ 调用
+
+仓库的 [cpp/README.md](cpp/README.md) 提供独立 C++17 部署版，使用 ONNX Runtime 执行当前两阶段模型。核心接口直接接收 `std::vector<Vec3>`，不依赖 Python、PyTorch、Open3D 或 PCL：
+
+```cpp
+fineloc::FineLocationEngine engine("models/stage1.onnx", "models/stage2.onnx");
+fineloc::Prediction result = engine.infer(raw_points, geometry_prior);
+```
+
+内置 ONNX 模型位于 `models/`。C++ 版保留平面法向非正交基、8192 点随机采样、二阶段 KNN16384，以及起点、焊缝方向和两个平面法向输出。
+
+C++ 部署版专注于稳定推理，不包含三维窗口；需要交互式查看结果时使用本 README 前述 Python 命令并添加 `--visualize`。
